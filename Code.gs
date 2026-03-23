@@ -22,11 +22,7 @@ function onOpen() {
 
   ui.createMenu('TEMED')
     .addItem('Отобрать врачей', 'selectDoctors')
-    .addSeparator()
     .addItem('Сформировать сообщения ГВ (премии)', 'buildClinicBonusMessages')
-    .addToUi();
-
-  ui.createMenu(MENU_NAME)
     .addItem('Сформировать месячные премии', 'generateMonthlyBonuses')
     .addItem('Отправить премии', 'sendMonthlyBonuses')
     .addToUi();
