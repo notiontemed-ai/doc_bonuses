@@ -280,9 +280,9 @@ function buildBonusEmailContent_(monthInfo, values, clinicAggregateTable) {
       '<p>Файл CSV из приложения можно открыть в Excel через меню Файл → Открыть или просто перетащить файл в окно программы. Если данные отображаются некорректно — укажите разделитель столбцов <b>;</b> (точка с запятой) при импорте.</p>',
       '<p>В Google Таблицах откройте таблицы, выберите Файл → Импорт → Загрузка и загрузите CSV-файл, при необходимости также выберите разделитель <b>;</b>.</p>',
       `<p>Во вложении файл с премиями врачей за ${escapeHtml_(monthInfo.monthName)} ${escapeHtml_(monthInfo.fullYear)}.</p>`,
+      htmlTable,
       `<p><b>${escapeHtml_(clinicAggregateTable.htmlTitle)}</b></p>`,
       clinicAggregateTable.htmlTable,
-      htmlTable,
       '<p>Письмо сформировано автоматически.</p>',
       '</div>',
     ].join(''),
@@ -361,9 +361,12 @@ function buildClinicAggregateTable_(spreadsheet, monthCode) {
     }
   });
 
-  const clinics = Object.keys(currentByClinic).sort((a, b) => a.localeCompare(b, 'ru'));
+  const clinics = Array.from(new Set([
+    ...Object.keys(currentByClinic),
+    ...Object.keys(previousByClinic),
+  ])).sort((a, b) => a.localeCompare(b, 'ru'));
   if (!clinics.length) {
-    return buildEmptyClinicAggregateTable_(monthCode, 'Нет данных по клиникам за выбранный месяц.');
+    return buildEmptyClinicAggregateTable_(monthCode, 'Нет данных по клиникам за выбранный и предыдущий месяц.');
   }
 
   const previousMonthLabel = previousMonthCode ? formatMonthLabel_(previousMonthCode) : 'Нет данных';
