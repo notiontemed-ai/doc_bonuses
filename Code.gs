@@ -92,7 +92,8 @@ function sendMonthlyBonuses() {
   const monthInfo = getMonthInfo_(monthCode);
   const subject = `Премия врачей ${monthInfo.monthName} ${monthInfo.fullYear}`;
   const bonusValues = bonusSheet.getDataRange().getDisplayValues();
-  const emailContent = buildBonusEmailContent_(monthInfo, bonusValues);
+  const clinicAggregateTable = buildClinicAggregateTable_(spreadsheet, monthCode);
+  const emailContent = buildBonusEmailContent_(monthInfo, bonusValues, clinicAggregateTable);
 
   const attachment = buildSheetCsvBlob_(bonusValues, bonusSheetName + '.csv');
   MailApp.sendEmail({
@@ -253,7 +254,7 @@ function buildSheetCsvBlob_(values, fileName) {
   return Utilities.newBlob('\uFEFF' + csv, 'text/csv', fileName);
 }
 
-function buildBonusEmailContent_(monthInfo, values) {
+function buildBonusEmailContent_(monthInfo, values, clinicAggregateTable) {
   const instructionsText = [
     'Файл CSV из приложения можно открыть в Excel через меню Файл → Открыть или просто перетащить файл в окно программы. Если данные отображаются некорректно — укажите разделитель столбцов ; (точка с запятой) при импорте.',
     'В Google Таблицах откройте таблицы, выберите Файл → Импорт → Загрузка и загрузите CSV-файл, при необходимости также выберите разделитель ;.',
@@ -268,6 +269,9 @@ function buildBonusEmailContent_(monthInfo, values) {
       '',
       `Во вложении файл с премиями врачей за ${monthInfo.monthName} ${monthInfo.fullYear}.`,
       '',
+      clinicAggregateTable.textTitle,
+      ...clinicAggregateTable.textLines,
+      '',
       'Письмо сформировано автоматически.',
     ].join('\n'),
     htmlBody: [
@@ -276,6 +280,8 @@ function buildBonusEmailContent_(monthInfo, values) {
       '<p>Файл CSV из приложения можно открыть в Excel через меню Файл → Открыть или просто перетащить файл в окно программы. Если данные отображаются некорректно — укажите разделитель столбцов <b>;</b> (точка с запятой) при импорте.</p>',
       '<p>В Google Таблицах откройте таблицы, выберите Файл → Импорт → Загрузка и загрузите CSV-файл, при необходимости также выберите разделитель <b>;</b>.</p>',
       `<p>Во вложении файл с премиями врачей за ${escapeHtml_(monthInfo.monthName)} ${escapeHtml_(monthInfo.fullYear)}.</p>`,
+      `<p><b>${escapeHtml_(clinicAggregateTable.htmlTitle)}</b></p>`,
+      clinicAggregateTable.htmlTable,
       htmlTable,
       '<p>Письмо сформировано автоматически.</p>',
       '</div>',
@@ -305,6 +311,125 @@ function buildHtmlTable_(values) {
     `<tbody>${bodyRows}</tbody>`,
     '</table>',
   ].join('');
+}
+
+function buildClinicAggregateTable_(spreadsheet, monthCode) {
+  const sourceSheet = getSourceSheet_(spreadsheet);
+  const sourceData = sourceSheet.getDataRange().getValues();
+
+  if (sourceData.length < 2) {
+    return buildEmptyClinicAggregateTable_(monthCode, 'Нет данных для агрегирования по клиникам.');
+  }
+
+  const headerMap = createHeaderAliasMap_(sourceData[0], {
+    month: ['Месяц', 'Код месяца'],
+    clinic: ['Клиника'],
+    totalBonus: ['Премия ИТОГО (округл)'],
+  });
+
+  const monthNumbers = Array.from(new Set(sourceData
+    .slice(1)
+    .map((row) => normalizeMonthCode_(row[headerMap.month]))
+    .filter((value) => /^\d{4}$/.test(value))))
+    .map((value) => Number(value))
+    .sort((a, b) => a - b);
+
+  const currentMonthNumber = Number(monthCode);
+  const previousMonthNumber = monthNumbers
+    .filter((value) => value < currentMonthNumber)
+    .pop();
+  const previousMonthCode = previousMonthNumber ? String(previousMonthNumber).padStart(4, '0') : '';
+
+  const currentByClinic = {};
+  const previousByClinic = {};
+
+  sourceData.slice(1).forEach((row) => {
+    const rowMonthCode = normalizeMonthCode_(row[headerMap.month]);
+    const clinicName = String(row[headerMap.clinic] ?? '').trim();
+    const bonusValue = Number(normalizeBonusValue_(row[headerMap.totalBonus]));
+
+    if (!clinicName || !bonusValue) {
+      return;
+    }
+
+    if (rowMonthCode === monthCode) {
+      currentByClinic[clinicName] = (currentByClinic[clinicName] || 0) + bonusValue;
+    }
+
+    if (previousMonthCode && rowMonthCode === previousMonthCode) {
+      previousByClinic[clinicName] = (previousByClinic[clinicName] || 0) + bonusValue;
+    }
+  });
+
+  const clinics = Object.keys(currentByClinic).sort((a, b) => a.localeCompare(b, 'ru'));
+  if (!clinics.length) {
+    return buildEmptyClinicAggregateTable_(monthCode, 'Нет данных по клиникам за выбранный месяц.');
+  }
+
+  const previousMonthLabel = previousMonthCode ? formatMonthLabel_(previousMonthCode) : 'Нет данных';
+  const rows = [['Клиника', 'Текущий месяц', previousMonthLabel, 'Отклонение']];
+  let currentTotal = 0;
+  let previousTotal = 0;
+
+  clinics.forEach((clinicName) => {
+    const currentValue = currentByClinic[clinicName] || 0;
+    const previousValue = previousByClinic[clinicName] || 0;
+
+    currentTotal += currentValue;
+    previousTotal += previousValue;
+    rows.push([
+      clinicName,
+      formatInteger_(currentValue),
+      previousMonthCode ? formatInteger_(previousValue) : '—',
+      previousMonthCode ? formatSignedInteger_(currentValue - previousValue) : '—',
+    ]);
+  });
+
+  rows.push([
+    'Итого',
+    formatInteger_(currentTotal),
+    previousMonthCode ? formatInteger_(previousTotal) : '—',
+    previousMonthCode ? formatSignedInteger_(currentTotal - previousTotal) : '—',
+  ]);
+
+  return {
+    textTitle: `Агрегированные данные по клиникам за ${formatMonthLabel_(monthCode)}:`,
+    textLines: rows.map((row) => row.join(' | ')),
+    htmlTitle: `Агрегированные данные по клиникам за ${formatMonthLabel_(monthCode)}`,
+    htmlTable: buildHtmlTable_(rows),
+  };
+}
+
+function buildEmptyClinicAggregateTable_(monthCode, message) {
+  return {
+    textTitle: `Агрегированные данные по клиникам за ${formatMonthLabel_(monthCode)}:`,
+    textLines: [message],
+    htmlTitle: `Агрегированные данные по клиникам за ${formatMonthLabel_(monthCode)}`,
+    htmlTable: `<p>${escapeHtml_(message)}</p>`,
+  };
+}
+
+function normalizeMonthCode_(value) {
+  if (value === null || value === undefined || value === '') {
+    return '';
+  }
+
+  const normalized = String(value).trim();
+  return /^\d{1,4}$/.test(normalized) ? normalized.padStart(4, '0') : normalized;
+}
+
+function formatMonthLabel_(monthCode) {
+  const monthInfo = getMonthInfo_(monthCode);
+  return `${monthInfo.monthName} ${monthInfo.fullYear}`;
+}
+
+function formatInteger_(value) {
+  return Utilities.formatString('%d', Math.round(Number(value) || 0));
+}
+
+function formatSignedInteger_(value) {
+  const normalized = Math.round(Number(value) || 0);
+  return normalized > 0 ? `+${normalized}` : String(normalized);
 }
 
 function escapeCsvValue_(value) {
