@@ -76,7 +76,7 @@ function generateMonthlyBonuses() {
 
 function sendMonthlyBonuses() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const monthCode = getMonthCodeFromActiveCell_(spreadsheet);
+  const monthCode = getMonthCodeFromActiveSheetName_(spreadsheet);
   const bonusSheetName = BONUS_SHEET_PREFIX + monthCode;
   const bonusSheet = spreadsheet.getSheetByName(bonusSheetName);
 
@@ -119,6 +119,23 @@ function getMonthCodeFromActiveCell_(spreadsheet) {
 
   getMonthInfo_(rawValue);
   return rawValue;
+}
+
+
+function getMonthCodeFromActiveSheetName_(spreadsheet) {
+  const activeSheet = spreadsheet.getActiveSheet();
+  if (!activeSheet) {
+    throw new Error('Не удалось определить активный лист для отправки письма.');
+  }
+
+  const sheetName = String(activeSheet.getName()).trim();
+  const monthCode = sheetName.slice(-4);
+  if (!/^\d{4}$/.test(monthCode)) {
+    throw new Error('Название активного листа должно оканчиваться 4-значным кодом месяца в формате ГГММ, например 2604.');
+  }
+
+  getMonthInfo_(monthCode);
+  return monthCode;
 }
 
 function getMonthInfo_(monthCode) {
@@ -241,7 +258,6 @@ function buildBonusEmailContent_(monthInfo, values) {
     'Файл CSV из приложения можно открыть в Excel через меню Файл → Открыть или просто перетащить файл в окно программы. Если данные отображаются некорректно — укажите разделитель столбцов ; (точка с запятой) при импорте.',
     'В Google Таблицах откройте таблицы, выберите Файл → Импорт → Загрузка и загрузите CSV-файл, при необходимости также выберите разделитель ;.',
   ];
-  const copyBlock = buildCopyFriendlyTableText_(values);
   const htmlTable = buildHtmlTable_(values);
 
   return {
@@ -252,9 +268,6 @@ function buildBonusEmailContent_(monthInfo, values) {
       '',
       `Во вложении файл с премиями врачей за ${monthInfo.monthName} ${monthInfo.fullYear}.`,
       '',
-      'Таблица для копирования:',
-      copyBlock,
-      '',
       'Письмо сформировано автоматически.',
     ].join('\n'),
     htmlBody: [
@@ -263,8 +276,6 @@ function buildBonusEmailContent_(monthInfo, values) {
       '<p>Файл CSV из приложения можно открыть в Excel через меню Файл → Открыть или просто перетащить файл в окно программы. Если данные отображаются некорректно — укажите разделитель столбцов <b>;</b> (точка с запятой) при импорте.</p>',
       '<p>В Google Таблицах откройте таблицы, выберите Файл → Импорт → Загрузка и загрузите CSV-файл, при необходимости также выберите разделитель <b>;</b>.</p>',
       `<p>Во вложении файл с премиями врачей за ${escapeHtml_(monthInfo.monthName)} ${escapeHtml_(monthInfo.fullYear)}.</p>`,
-      '<p><b>Таблица для копирования:</b></p>',
-      `<pre style="margin:0 0 16px;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;font-family:Consolas,Monaco,monospace;font-size:13px;white-space:pre-wrap;">${escapeHtml_(copyBlock)}</pre>`,
       htmlTable,
       '<p>Письмо сформировано автоматически.</p>',
       '</div>',
@@ -272,11 +283,6 @@ function buildBonusEmailContent_(monthInfo, values) {
   };
 }
 
-function buildCopyFriendlyTableText_(values) {
-  return values
-    .map((row) => row.map((value) => String(value ?? '')).join('\t'))
-    .join('\n');
-}
 
 function buildHtmlTable_(values) {
   if (!values.length) {
