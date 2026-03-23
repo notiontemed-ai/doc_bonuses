@@ -1,6 +1,6 @@
 const SOURCE_SHEET_CANDIDATES = ['Индвидуальные показатели', 'Индивидуальные показатели'];
 const RECIPIENT_SHEET_NAME = 'Отправка';
-const BONUS_SHEET_PREFIX = 'Премии+';
+const BONUS_SHEET_PREFIX = 'Премии ';
 const MENU_NAME = 'Премии';
 const MONTH_NAMES_RU = [
   'январь',
@@ -95,37 +95,17 @@ function sendMonthlyBonuses() {
 
   const monthInfo = getMonthInfo_(monthCode);
   const subject = `Премия врачей ${monthInfo.monthName} ${monthInfo.fullYear}`;
-  const body = [
-    'Добрый день!',
-    '',
-    `Во вложении файл с премиями врачей за ${monthInfo.monthName} ${monthInfo.fullYear}.`,
-    '',
-    'Письмо сформировано автоматически.',
-  ].join('\n');
+  const bonusValues = bonusSheet.getDataRange().getDisplayValues();
+  const emailContent = buildBonusEmailContent_(monthInfo, bonusValues);
 
-  const tempSpreadsheet = SpreadsheetApp.create(`${bonusSheetName}_temp_export`);
-  let tempFile;
-
-  try {
-    const copiedSheet = bonusSheet.copyTo(tempSpreadsheet).setName(bonusSheetName);
-    const defaultSheet = tempSpreadsheet.getSheets().find((sheet) => sheet.getSheetId() !== copiedSheet.getSheetId());
-    if (defaultSheet) {
-      tempSpreadsheet.deleteSheet(defaultSheet);
-    }
-
-    const blob = exportSpreadsheetAsXlsx_(tempSpreadsheet.getId(), bonusSheetName + '.xlsx');
-    MailApp.sendEmail({
-      to: recipients.join(','),
-      subject,
-      body,
-      attachments: [blob],
-    });
-  } finally {
-    tempFile = DriveApp.getFileById(tempSpreadsheet.getId());
-    if (tempFile) {
-      tempFile.setTrashed(true);
-    }
-  }
+  const attachment = buildSheetCsvBlob_(bonusValues, bonusSheetName + '.csv');
+  MailApp.sendEmail({
+    to: recipients.join(','),
+    subject,
+    body: emailContent.textBody,
+    htmlBody: emailContent.htmlBody,
+    attachments: [attachment],
+  });
 
   SpreadsheetApp.getUi().alert(`Письмо отправлено: ${recipients.join(', ')}.`);
 }
@@ -252,23 +232,92 @@ function normalizeBonusValue_(value) {
   return normalized || '0';
 }
 
-function exportSpreadsheetAsXlsx_(spreadsheetId, fileName) {
-  const url = `https://www.googleapis.com/drive/v3/files/${spreadsheetId}/export?mimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`;
-  const response = UrlFetchApp.fetch(url, {
-    headers: {
-      Authorization: 'Bearer ' + ScriptApp.getOAuthToken(),
-    },
-    muteHttpExceptions: true,
-  });
+function buildSheetCsvBlob_(values, fileName) {
+  const csv = values
+    .map((row) => row.map(escapeCsvValue_).join(';'))
+    .join('\r\n');
 
-  const responseCode = response.getResponseCode();
-  if (responseCode !== 200) {
-    throw new Error(`Не удалось экспортировать XLSX. Код ответа: ${responseCode}.`);
-  }
-
-  return response.getBlob().setName(fileName);
+  return Utilities.newBlob('\uFEFF' + csv, 'text/csv', fileName);
 }
 
+function buildBonusEmailContent_(monthInfo, values) {
+  const instructionsText = [
+    'Файл CSV из приложения можно открыть в Excel через меню Файл → Открыть или просто перетащить файл в окно программы. Если данные отображаются некорректно — укажите разделитель столбцов ; (точка с запятой) при импорте.',
+    'В Google Таблицах откройте таблицы, выберите Файл → Импорт → Загрузка и загрузите CSV-файл, при необходимости также выберите разделитель ;.',
+  ];
+  const copyBlock = buildCopyFriendlyTableText_(values);
+  const htmlTable = buildHtmlTable_(values);
+
+  return {
+    textBody: [
+      'Добрый день!',
+      '',
+      ...instructionsText,
+      '',
+      `Во вложении файл с премиями врачей за ${monthInfo.monthName} ${monthInfo.fullYear}.`,
+      '',
+      'Таблица для копирования:',
+      copyBlock,
+      '',
+      'Письмо сформировано автоматически.',
+    ].join('\n'),
+    htmlBody: [
+      '<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#202124;">',
+      '<p>Добрый день!</p>',
+      '<p>Файл CSV из приложения можно открыть в Excel через меню Файл → Открыть или просто перетащить файл в окно программы. Если данные отображаются некорректно — укажите разделитель столбцов <b>;</b> (точка с запятой) при импорте.</p>',
+      '<p>В Google Таблицах откройте таблицы, выберите Файл → Импорт → Загрузка и загрузите CSV-файл, при необходимости также выберите разделитель <b>;</b>.</p>',
+      `<p>Во вложении файл с премиями врачей за ${escapeHtml_(monthInfo.monthName)} ${escapeHtml_(monthInfo.fullYear)}.</p>`,
+      '<p><b>Таблица для копирования:</b></p>',
+      `<pre style="margin:0 0 16px;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;font-family:Consolas,Monaco,monospace;font-size:13px;white-space:pre-wrap;">${escapeHtml_(copyBlock)}</pre>`,
+      htmlTable,
+      '<p>Письмо сформировано автоматически.</p>',
+      '</div>',
+    ].join(''),
+  };
+}
+
+function buildCopyFriendlyTableText_(values) {
+  return values
+    .map((row) => row.map((value) => String(value ?? '')).join('\t'))
+    .join('\n');
+}
+
+function buildHtmlTable_(values) {
+  if (!values.length) {
+    return '';
+  }
+
+  const headerCells = values[0]
+    .map((value) => `<th style="border:1px solid #d0d7de;padding:8px 10px;background:#f6f8fa;text-align:left;">${escapeHtml_(value)}</th>`)
+    .join('');
+  const bodyRows = values
+    .slice(1)
+    .map((row) => '<tr>' + row
+      .map((value) => `<td style="border:1px solid #d0d7de;padding:8px 10px;">${escapeHtml_(value)}</td>`)
+      .join('') + '</tr>')
+    .join('');
+
+  return [
+    '<table style="border-collapse:collapse;border-spacing:0;margin:0 0 16px;font-family:Arial,sans-serif;font-size:14px;">',
+    `<thead><tr>${headerCells}</tr></thead>`,
+    `<tbody>${bodyRows}</tbody>`,
+    '</table>',
+  ].join('');
+}
+
+function escapeCsvValue_(value) {
+  const normalized = String(value ?? '').replace(/"/g, '""');
+  return '"' + normalized + '"';
+}
+
+function escapeHtml_(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 function selectDoctors() {
   var ui = SpreadsheetApp.getUi();
